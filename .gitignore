@@ -1,0 +1,14 @@
+# Test output directories (date-hostname format)
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-*/
+
+# SCC bundle files (should be manually transferred, not committed)
+scc-*_bundle.zip
+
+# SCC extracted directories
+scc-*/
+
+# Editor/OS files
+*.swp
+*.swo
+*~
+.DS_Store
