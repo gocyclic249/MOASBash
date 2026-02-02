@@ -932,12 +932,12 @@ PKG_COUNT=0
 
 # Detect package manager and get installed packages
 if command_exists dpkg; then
-    # Debian/Ubuntu
+    # Debian/Ubuntu - use binary:Summary for single-line description
     print_gray "  Using dpkg for package list..."
     while IFS=$'\t' read -r NAME VERSION ARCH DESC; do
         append_csv_row "$CSV_INSTALLED_PACKAGES" "$NAME" "$VERSION" "$ARCH" "$DESC"
         ((PKG_COUNT++))
-    done < <(dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\t${Description}\n' 2>/dev/null | cut -c1-500)
+    done < <(dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\t${binary:Summary}\n' 2>/dev/null)
 
 elif command_exists rpm; then
     # RHEL/CentOS/Fedora
