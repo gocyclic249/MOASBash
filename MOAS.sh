@@ -275,6 +275,7 @@ show_scc_requirements() {
 
 # Function to find and setup SCC
 # Note: Status messages go to stderr, only the executable path goes to stdout
+# Supports: pre-extracted cscc, ZIP bundle, or system-installed cscc
 setup_scc() {
     local script_dir="$1"
     local output_dir="$2"
@@ -287,13 +288,43 @@ setup_scc() {
         return 1
     fi
 
-    # Look for SCC bundle in script directory
-    print_green "Looking for SCC bundle in: $script_dir" >&2
+    print_green "Looking for SCC in: $script_dir" >&2
 
+    # FIRST: Check for pre-extracted cscc executable in script directory or subdirectories
+    # This allows systems without unzip to use a pre-extracted SCC
+    print_white "  Checking for pre-extracted cscc..." >&2
+    local existing_cscc=$(find "$script_dir" -name "cscc" -type f 2>/dev/null | head -1)
+
+    if [ -n "$existing_cscc" ]; then
+        # Make sure it's executable
+        if [ ! -x "$existing_cscc" ]; then
+            chmod +x "$existing_cscc" 2>/dev/null
+        fi
+
+        if [ -x "$existing_cscc" ]; then
+            print_green "  Found pre-extracted SCC: $existing_cscc" >&2
+            echo "$existing_cscc"
+            return 0
+        fi
+    fi
+
+    # SECOND: Check if cscc is installed system-wide
+    if command_exists cscc; then
+        local system_cscc=$(which cscc)
+        print_green "  Found system-installed SCC: $system_cscc" >&2
+        echo "$system_cscc"
+        return 0
+    fi
+
+    # THIRD: Try to extract from ZIP bundle
     local scc_zip=$(find "$script_dir" -maxdepth 1 -name "scc-*_bundle.zip" -type f 2>/dev/null | head -1)
 
     if [ -z "$scc_zip" ]; then
-        print_red "  SCC bundle not found!" >&2
+        print_red "  No SCC found!" >&2
+        print_yellow "  Options:" >&2
+        print_yellow "    1. Place pre-extracted SCC folder in script directory" >&2
+        print_yellow "    2. Place SCC bundle ZIP in script directory" >&2
+        print_yellow "    3. Install SCC system-wide via package manager" >&2
         echo "" >&2
         show_scc_requirements >&2
         return 1
@@ -301,21 +332,27 @@ setup_scc() {
 
     print_green "  Found SCC bundle: $(basename "$scc_zip")" >&2
 
+    # Check if unzip is available
+    if ! command_exists unzip; then
+        print_red "  'unzip' command not available" >&2
+        print_yellow "  Please pre-extract the SCC bundle on another system:" >&2
+        echo "    1. On a system with unzip, run: unzip $(basename "$scc_zip")" >&2
+        echo "    2. Extract the tarball: tar -xzf scc-*.tar.gz" >&2
+        echo "    3. Copy the extracted scc_* folder to: $script_dir" >&2
+        echo "" >&2
+        WARNINGS+=("SCC scan skipped - unzip not available and no pre-extracted SCC found")
+        return 1
+    fi
+
     # Create SCC working directory
     local scc_work_dir="${output_dir}/SCC"
     mkdir -p "$scc_work_dir"
 
     # Extract the ZIP bundle
     print_green "  Extracting SCC bundle..." >&2
-    if command_exists unzip; then
-        unzip -q -o "$scc_zip" -d "$scc_work_dir" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            print_red "  Failed to extract ZIP bundle" >&2
-            return 1
-        fi
-    else
-        print_red "  'unzip' command not found - please install unzip" >&2
-        WARNINGS+=("SCC scan skipped - unzip not installed")
+    unzip -q -o "$scc_zip" -d "$scc_work_dir" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        print_red "  Failed to extract ZIP bundle" >&2
         return 1
     fi
 
@@ -369,14 +406,6 @@ setup_scc() {
         [ -n "$scc_rpm" ] && echo "    sudo rpm -i $scc_rpm" >&2
         [ -n "$scc_deb" ] && echo "    sudo dpkg -i $scc_deb" >&2
         echo "" >&2
-
-        # Check if SCC is already installed
-        if command_exists cscc; then
-            SCC_EXECUTABLE=$(which cscc)
-            print_green "  Using installed SCC: $SCC_EXECUTABLE" >&2
-            echo "$SCC_EXECUTABLE"
-            return 0
-        fi
     fi
 
     print_red "  Could not find or setup SCC executable" >&2
