@@ -16,6 +16,10 @@
 #      - System logs via journalctl
 #      - OpenSCAP support
 #      - Summary report
+# V1.1 Added DISA SCC (SCAP Compliance Checker) support
+#      - Auto-detects OS and recommends correct SCC bundle
+#      - Extracts and runs SCC from bundle in script directory
+#      - Designed for air-gapped systems (manual file transfer)
 #
 # Known Working Systems:
 # Ubuntu 20.04+, Debian 10+
@@ -38,12 +42,13 @@ NC='\033[0m' # No Color
 SHOW_HELP=false
 SILENT=false
 RUN_SCAP=false
+RUN_SCC=false
 SCAP_PROFILE=""
 LOG_DAYS=90
 #endregion
 
 #region Version
-VERSION="1.0"
+VERSION="1.1"
 #endregion
 
 #region Helper Functions
@@ -107,6 +112,311 @@ get_value_or_na() {
         echo "$value"
     fi
 }
+
+# Function to detect OS and recommend SCC bundle
+# Returns: recommended SCC bundle filename pattern
+get_scc_bundle_info() {
+    local os_id=""
+    local os_version_id=""
+    local arch=$(uname -m)
+
+    # Read OS information
+    if [ -f /etc/os-release ]; then
+        source /etc/os-release
+        os_id="$ID"
+        os_version_id="$VERSION_ID"
+    fi
+
+    # Map architecture
+    local scc_arch=""
+    case "$arch" in
+        x86_64)  scc_arch="x86_64" ;;
+        aarch64) scc_arch="aarch64" ;;
+        armv7l)  scc_arch="armv7l" ;;
+        amd64)   scc_arch="amd64" ;;
+        *)       scc_arch="$arch" ;;
+    esac
+
+    # Determine bundle based on OS
+    local bundle_pattern=""
+    local bundle_name=""
+    local download_url="https://public.cyber.mil/stigs/scap/"
+
+    case "$os_id" in
+        ubuntu)
+            case "${os_version_id%%.*}" in
+                18|19|20)
+                    if [ "$scc_arch" = "aarch64" ] || [ "$scc_arch" = "arm64" ]; then
+                        bundle_name="scc-*_ubuntu20_raspios*_arm64_bundle.zip"
+                        bundle_pattern="Ubuntu 20/Raspberry Pi OS ARM64"
+                    else
+                        bundle_name="scc-*_ubuntu18-20_amd64_bundle.zip"
+                        bundle_pattern="Ubuntu 18-20 AMD64"
+                    fi
+                    ;;
+                21|22|23|24)
+                    bundle_name="scc-*_ubuntu22_amd64_bundle.zip"
+                    bundle_pattern="Ubuntu 22+ AMD64"
+                    ;;
+                *)
+                    bundle_name="scc-*_ubuntu22_amd64_bundle.zip"
+                    bundle_pattern="Ubuntu (latest available)"
+                    ;;
+            esac
+            ;;
+        debian)
+            # Debian uses Ubuntu packages
+            bundle_name="scc-*_ubuntu22_amd64_bundle.zip"
+            bundle_pattern="Ubuntu 22 AMD64 (Debian compatible)"
+            ;;
+        rhel|centos|rocky|almalinux)
+            case "${os_version_id%%.*}" in
+                7)
+                    bundle_name="scc-*_rhel7_sles12-15_oracle-linux7_x86_64_bundle.zip"
+                    bundle_pattern="RHEL 7 / SLES 12-15 / Oracle Linux 7 x86_64"
+                    ;;
+                8)
+                    if [ "$scc_arch" = "aarch64" ]; then
+                        bundle_name="scc-*_rhel8_oracle-linux8_aarch64_bundle.zip"
+                        bundle_pattern="RHEL 8 / Oracle Linux 8 AARCH64"
+                    else
+                        bundle_name="scc-*_rhel8_oracle-linux8_x86_64_bundle.zip"
+                        bundle_pattern="RHEL 8 / Oracle Linux 8 x86_64"
+                    fi
+                    ;;
+                9|10)
+                    bundle_name="scc-*_rhel9_oracle-linux9_x86_64_bundle.zip"
+                    bundle_pattern="RHEL 9 / Oracle Linux 9 x86_64"
+                    ;;
+                *)
+                    bundle_name="scc-*_rhel9_oracle-linux9_x86_64_bundle.zip"
+                    bundle_pattern="RHEL (latest available)"
+                    ;;
+            esac
+            ;;
+        fedora)
+            # Fedora uses RHEL packages - match to closest RHEL version
+            bundle_name="scc-*_rhel9_oracle-linux9_x86_64_bundle.zip"
+            bundle_pattern="RHEL 9 x86_64 (Fedora compatible)"
+            ;;
+        ol|oracle)
+            case "${os_version_id%%.*}" in
+                7)
+                    bundle_name="scc-*_rhel7_sles12-15_oracle-linux7_x86_64_bundle.zip"
+                    bundle_pattern="Oracle Linux 7 x86_64"
+                    ;;
+                8)
+                    bundle_name="scc-*_rhel8_oracle-linux8_x86_64_bundle.zip"
+                    bundle_pattern="Oracle Linux 8 x86_64"
+                    ;;
+                *)
+                    bundle_name="scc-*_rhel9_oracle-linux9_x86_64_bundle.zip"
+                    bundle_pattern="Oracle Linux 9 x86_64"
+                    ;;
+            esac
+            ;;
+        sles|opensuse*)
+            bundle_name="scc-*_rhel7_sles12-15_oracle-linux7_x86_64_bundle.zip"
+            bundle_pattern="SLES 12-15 x86_64"
+            ;;
+        *)
+            bundle_name="UNKNOWN"
+            bundle_pattern="Unknown OS - please check cyber.mil for compatible bundle"
+            ;;
+    esac
+
+    # Return as a formatted string (bundle_name|bundle_pattern|download_url)
+    echo "${bundle_name}|${bundle_pattern}|${download_url}"
+}
+
+# Function to display SCC requirements
+show_scc_requirements() {
+    local info=$(get_scc_bundle_info)
+    local bundle_name=$(echo "$info" | cut -d'|' -f1)
+    local bundle_pattern=$(echo "$info" | cut -d'|' -f2)
+    local download_url=$(echo "$info" | cut -d'|' -f3)
+
+    echo ""
+    print_cyan "========================================================"
+    print_cyan "  DISA SCC (SCAP Compliance Checker) Requirements"
+    print_cyan "========================================================"
+    echo ""
+    print_white "  Detected System:"
+    if [ -f /etc/os-release ]; then
+        source /etc/os-release
+        echo "    OS: $NAME $VERSION"
+    fi
+    echo "    Architecture: $(uname -m)"
+    echo ""
+    print_yellow "  Required SCC Bundle:"
+    echo "    Pattern: $bundle_pattern"
+    echo "    Filename: $bundle_name"
+    echo ""
+    print_yellow "  Download Location:"
+    echo "    $download_url"
+    echo ""
+    print_yellow "  Instructions:"
+    echo "    1. Download the SCC bundle from cyber.mil (no login required)"
+    echo "    2. Transfer the ZIP file to this system"
+    echo "    3. Place the ZIP file in the same directory as this script:"
+    print_white "       $(dirname "${BASH_SOURCE[0]}")/"
+    echo "    4. Run this script with --scc flag"
+    echo ""
+    print_cyan "  The script will automatically:"
+    echo "    - Find the SCC bundle ZIP file"
+    echo "    - Extract the bundle"
+    echo "    - Extract the tar.gz installer"
+    echo "    - Run the SCAP compliance scan"
+    echo "    - Save results to the output directory"
+    echo ""
+    print_cyan "========================================================"
+    echo ""
+}
+
+# Function to find and setup SCC
+setup_scc() {
+    local script_dir="$1"
+    local output_dir="$2"
+
+    local info=$(get_scc_bundle_info)
+    local bundle_pattern=$(echo "$info" | cut -d'|' -f1)
+
+    if [ "$bundle_pattern" = "UNKNOWN" ]; then
+        print_red "  Cannot determine SCC bundle for this OS"
+        return 1
+    fi
+
+    # Look for SCC bundle in script directory
+    print_green "Looking for SCC bundle in: $script_dir"
+
+    local scc_zip=$(find "$script_dir" -maxdepth 1 -name "scc-*_bundle.zip" -type f 2>/dev/null | head -1)
+
+    if [ -z "$scc_zip" ]; then
+        print_red "  SCC bundle not found!"
+        echo ""
+        show_scc_requirements
+        return 1
+    fi
+
+    print_green "  Found SCC bundle: $(basename "$scc_zip")"
+
+    # Create SCC working directory
+    local scc_work_dir="${output_dir}/SCC"
+    mkdir -p "$scc_work_dir"
+
+    # Extract the ZIP bundle
+    print_green "  Extracting SCC bundle..."
+    if command_exists unzip; then
+        unzip -q -o "$scc_zip" -d "$scc_work_dir" 2>/dev/null
+        if [ $? -ne 0 ]; then
+            print_red "  Failed to extract ZIP bundle"
+            return 1
+        fi
+    else
+        print_red "  'unzip' command not found - please install unzip"
+        WARNINGS+=("SCC scan skipped - unzip not installed")
+        return 1
+    fi
+
+    # Find and extract the tar.gz file
+    local scc_tarball=$(find "$scc_work_dir" -name "scc-*.tar.gz" -type f 2>/dev/null | head -1)
+
+    if [ -z "$scc_tarball" ]; then
+        # Try to find tar.gz in subdirectories
+        scc_tarball=$(find "$scc_work_dir" -name "*.tar.gz" -type f 2>/dev/null | head -1)
+    fi
+
+    if [ -n "$scc_tarball" ]; then
+        print_green "  Found tarball: $(basename "$scc_tarball")"
+        print_green "  Extracting SCC application..."
+
+        local scc_extract_dir="${scc_work_dir}/scc"
+        mkdir -p "$scc_extract_dir"
+
+        tar -xzf "$scc_tarball" -C "$scc_extract_dir" 2>/dev/null
+        if [ $? -ne 0 ]; then
+            print_red "  Failed to extract tarball"
+            return 1
+        fi
+
+        # Find the cscc executable
+        SCC_EXECUTABLE=$(find "$scc_extract_dir" -name "cscc" -type f -executable 2>/dev/null | head -1)
+
+        if [ -z "$SCC_EXECUTABLE" ]; then
+            # Try without executable flag (might need chmod)
+            SCC_EXECUTABLE=$(find "$scc_extract_dir" -name "cscc" -type f 2>/dev/null | head -1)
+            if [ -n "$SCC_EXECUTABLE" ]; then
+                chmod +x "$SCC_EXECUTABLE" 2>/dev/null
+            fi
+        fi
+
+        if [ -n "$SCC_EXECUTABLE" ]; then
+            print_green "  Found SCC executable: $SCC_EXECUTABLE"
+            echo "$SCC_EXECUTABLE"
+            return 0
+        fi
+    fi
+
+    # If no tarball, check for RPM or DEB packages
+    local scc_rpm=$(find "$scc_work_dir" -name "scc-*.rpm" -type f 2>/dev/null | head -1)
+    local scc_deb=$(find "$scc_work_dir" -name "scc-*.deb" -type f 2>/dev/null | head -1)
+
+    if [ -n "$scc_rpm" ] || [ -n "$scc_deb" ]; then
+        print_yellow "  Found package installer but no standalone tarball"
+        print_yellow "  For air-gapped systems, the tarball is recommended"
+        print_yellow "  You can install the package manually:"
+        [ -n "$scc_rpm" ] && echo "    sudo rpm -i $scc_rpm"
+        [ -n "$scc_deb" ] && echo "    sudo dpkg -i $scc_deb"
+        echo ""
+
+        # Check if SCC is already installed
+        if command_exists cscc; then
+            SCC_EXECUTABLE=$(which cscc)
+            print_green "  Using installed SCC: $SCC_EXECUTABLE"
+            echo "$SCC_EXECUTABLE"
+            return 0
+        fi
+    fi
+
+    print_red "  Could not find or setup SCC executable"
+    return 1
+}
+
+# Function to run SCC scan
+run_scc_scan() {
+    local scc_exe="$1"
+    local output_dir="$2"
+
+    if [ -z "$scc_exe" ] || [ ! -x "$scc_exe" ]; then
+        print_red "SCC executable not found or not executable"
+        return 1
+    fi
+
+    local scc_results_dir="${output_dir}/SCC/Results"
+    mkdir -p "$scc_results_dir"
+
+    print_green "Running SCC Compliance Scan..."
+    print_gray "  This may take several minutes..."
+    echo ""
+
+    # Run SCC with output directory
+    # SCC typically uses -u for unattended mode with output directory
+    "$scc_exe" -u "$scc_results_dir" 2>&1
+
+    local exit_code=$?
+
+    if [ $exit_code -eq 0 ]; then
+        print_green "SCC scan completed successfully!"
+        # Count result files
+        local result_count=$(find "$scc_results_dir" -type f 2>/dev/null | wc -l)
+        print_green "  Results saved to: $scc_results_dir ($result_count files)"
+        return 0
+    else
+        print_yellow "SCC scan completed with exit code: $exit_code"
+        print_yellow "  Check results in: $scc_results_dir"
+        return $exit_code
+    fi
+}
 #endregion
 
 #region Help Display
@@ -119,29 +429,46 @@ show_help() {
     print_yellow "DESCRIPTION:"
     echo "  Collects system inventory data including hardware, software,"
     echo "  network configuration, local users, event logs, and optionally"
-    echo "  runs OpenSCAP compliance scans."
+    echo "  runs DISA SCC or OpenSCAP compliance scans."
     echo ""
     print_yellow "USAGE:"
     echo "  ./MOAS.sh                     # Interactive mode"
     echo "  ./MOAS.sh --help              # Display this help message"
     echo "  ./MOAS.sh --silent [options]  # Silent/batch mode"
+    echo "  ./MOAS.sh --scc-info          # Show SCC bundle requirements"
     echo ""
     print_yellow "PARAMETERS:"
     echo "  -h, --help           Display this help message and exit"
     echo ""
     echo "  -s, --silent         Run in silent mode (no prompts)"
     echo ""
-    echo "  --scap               Enable OpenSCAP scan"
+    print_yellow "  DISA SCC (SCAP Compliance Checker):"
+    echo "  --scc                Enable DISA SCC scan"
+    echo "                       Requires SCC bundle ZIP in script directory"
+    echo "                       Download from: https://public.cyber.mil/stigs/scap/"
+    echo ""
+    echo "  --scc-info           Display SCC bundle requirements for this system"
+    echo "                       Shows which file to download from cyber.mil"
+    echo ""
+    print_yellow "  OpenSCAP (alternative):"
+    echo "  --scap               Enable OpenSCAP scan (requires oscap installed)"
     echo ""
     echo "  --scap-profile PATH  Path to SCAP profile/content file"
     echo "                       Default: searches for ssg-* content"
     echo ""
+    print_yellow "  Other Options:"
     echo "  --log-days DAYS      Number of days of logs to collect"
     echo "                       Range: 1-365, Default: 90"
     echo ""
     print_yellow "EXAMPLES:"
     print_gray "  # Interactive mode"
     print_gray "  ./MOAS.sh"
+    echo ""
+    print_gray "  # Show which SCC bundle to download"
+    print_gray "  ./MOAS.sh --scc-info"
+    echo ""
+    print_gray "  # Silent mode with DISA SCC scan (bundle must be in script dir)"
+    print_gray "  ./MOAS.sh --silent --scc"
     echo ""
     print_gray "  # Silent mode with defaults (90 days logs, no SCAP)"
     print_gray "  ./MOAS.sh --silent"
@@ -152,6 +479,23 @@ show_help() {
     print_gray "  # Silent mode with 30 days of logs"
     print_gray "  ./MOAS.sh --silent --log-days 30"
     echo ""
+    print_yellow "SCC BUNDLE SETUP (for air-gapped systems):"
+    echo "  1. On an internet-connected system, visit:"
+    echo "     https://public.cyber.mil/stigs/scap/"
+    echo ""
+    echo "  2. Download the appropriate SCC bundle for your target OS:"
+    echo "     - Ubuntu 18-20:  scc-X.X_ubuntu18-20_amd64_bundle.zip"
+    echo "     - Ubuntu 22+:    scc-X.X_ubuntu22_amd64_bundle.zip"
+    echo "     - RHEL 7:        scc-X.X_rhel7_sles12-15_oracle-linux7_x86_64_bundle.zip"
+    echo "     - RHEL 8:        scc-X.X_rhel8_oracle-linux8_x86_64_bundle.zip"
+    echo "     - RHEL 9:        scc-X.X_rhel9_oracle-linux9_x86_64_bundle.zip"
+    echo ""
+    echo "  3. Transfer the ZIP file to the target system"
+    echo ""
+    echo "  4. Place ZIP in the same directory as MOAS.sh"
+    echo ""
+    echo "  5. Run: sudo ./MOAS.sh --scc"
+    echo ""
     print_yellow "OUTPUT:"
     echo "  Creates a dated folder in the script directory containing:"
     echo "    - BasicInfo-*.csv        System/hardware information"
@@ -159,15 +503,17 @@ show_help() {
     echo "    - InstalledPackages-*.csv Installed packages"
     echo "    - PPS-*.csv              Network ports and processes"
     echo "    - Logs-*.csv             System log entries"
-    echo "    - SCAP/                  SCAP results folder (if run)"
+    echo "    - SCC/                   SCC results folder (if run)"
+    echo "    - SCAP/                  OpenSCAP results folder (if run)"
     echo ""
     print_yellow "REQUIREMENTS:"
     echo "  - Bash 4.0 or later"
     echo "  - Root privileges recommended for full functionality"
+    echo "  - unzip command (for SCC bundle extraction)"
     echo "  - Without root: Some hardware info and security logs are limited"
     echo ""
     print_yellow "SUPPORTED SYSTEMS:"
-    echo "  Ubuntu, Debian, RHEL, CentOS, Rocky, Fedora, Arch Linux"
+    echo "  Ubuntu 18+, Debian 10+, RHEL/CentOS/Rocky 7+, Fedora, SLES 12+"
     echo ""
     exit 0
 }
@@ -183,6 +529,14 @@ while [[ $# -gt 0 ]]; do
         -s|--silent)
             SILENT=true
             shift
+            ;;
+        --scc)
+            RUN_SCC=true
+            shift
+            ;;
+        --scc-info)
+            show_scc_requirements
+            exit 0
             ;;
         --scap)
             RUN_SCAP=true
@@ -268,30 +622,52 @@ if [ "$SILENT" = false ]; then
     print_cyan "========================================================"
     echo ""
 
-    # OpenSCAP Configuration
-    print_white "OpenSCAP Configuration:"
-    if command_exists oscap; then
-        read -p "  Run OpenSCAP scan? (Y/N) [N]: " RUN_SCAP_INPUT
-        if [[ "$RUN_SCAP_INPUT" =~ ^[Yy]$ ]]; then
-            RUN_SCAP=true
-            # Try to find SCAP content
-            DEFAULT_SCAP=$(find /usr/share/xml/scap -name "ssg-*-ds.xml" 2>/dev/null | head -1)
-            if [ -n "$DEFAULT_SCAP" ]; then
-                echo "  Found SCAP content: $DEFAULT_SCAP"
-                read -p "  Use this profile? (Y/N) [Y]: " USE_DEFAULT
-                if [[ ! "$USE_DEFAULT" =~ ^[Nn]$ ]]; then
-                    SCAP_PROFILE="$DEFAULT_SCAP"
+    # DISA SCC Configuration
+    print_white "DISA SCC (SCAP Compliance Checker) Configuration:"
+    # Check if SCC bundle exists in script directory
+    SCRIPT_DIR_CHECK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SCC_BUNDLE_CHECK=$(find "$SCRIPT_DIR_CHECK" -maxdepth 1 -name "scc-*_bundle.zip" -type f 2>/dev/null | head -1)
+
+    if [ -n "$SCC_BUNDLE_CHECK" ]; then
+        print_green "  Found SCC bundle: $(basename "$SCC_BUNDLE_CHECK")"
+        read -p "  Run DISA SCC compliance scan? (Y/N) [N]: " RUN_SCC_INPUT
+        if [[ "$RUN_SCC_INPUT" =~ ^[Yy]$ ]]; then
+            RUN_SCC=true
+        fi
+    else
+        print_yellow "  No SCC bundle found in script directory"
+        echo "  To use SCC, download the appropriate bundle from:"
+        echo "    https://public.cyber.mil/stigs/scap/"
+        echo "  Run './MOAS.sh --scc-info' to see which bundle you need"
+    fi
+    echo ""
+
+    # OpenSCAP Configuration (alternative to SCC)
+    if [ "$RUN_SCC" = false ]; then
+        print_white "OpenSCAP Configuration (alternative to SCC):"
+        if command_exists oscap; then
+            read -p "  Run OpenSCAP scan? (Y/N) [N]: " RUN_SCAP_INPUT
+            if [[ "$RUN_SCAP_INPUT" =~ ^[Yy]$ ]]; then
+                RUN_SCAP=true
+                # Try to find SCAP content
+                DEFAULT_SCAP=$(find /usr/share/xml/scap -name "ssg-*-ds.xml" 2>/dev/null | head -1)
+                if [ -n "$DEFAULT_SCAP" ]; then
+                    echo "  Found SCAP content: $DEFAULT_SCAP"
+                    read -p "  Use this profile? (Y/N) [Y]: " USE_DEFAULT
+                    if [[ ! "$USE_DEFAULT" =~ ^[Nn]$ ]]; then
+                        SCAP_PROFILE="$DEFAULT_SCAP"
+                    else
+                        read -p "  Enter path to SCAP profile: " SCAP_PROFILE
+                    fi
                 else
                     read -p "  Enter path to SCAP profile: " SCAP_PROFILE
                 fi
-            else
-                read -p "  Enter path to SCAP profile: " SCAP_PROFILE
             fi
+        else
+            print_yellow "  OpenSCAP (oscap) not installed - skipping OpenSCAP options"
         fi
-    else
-        print_yellow "  OpenSCAP (oscap) not installed - skipping SCAP options"
+        echo ""
     fi
-    echo ""
 
     # Log Collection Configuration
     print_white "Event Log Collection:"
@@ -335,8 +711,10 @@ START_TIME=$(date +%s)
 
 #region Display Configuration
 print_green "Configuration:"
-if [ "$RUN_SCAP" = true ]; then
-    echo "  Run SCAP: Yes"
+if [ "$RUN_SCC" = true ]; then
+    echo "  Run DISA SCC: Yes"
+elif [ "$RUN_SCAP" = true ]; then
+    echo "  Run OpenSCAP: Yes"
     echo "  SCAP Profile: $SCAP_PROFILE"
 else
     echo "  Run SCAP: No"
@@ -833,6 +1211,27 @@ elif [ -f /var/log/syslog ] || [ -f /var/log/messages ]; then
 else
     print_yellow "  No supported log system found"
     WARNINGS+=("Log collection unavailable")
+fi
+#endregion
+
+#region DISA SCC Scan
+if [ "$RUN_SCC" = true ]; then
+    print_green "Setting up DISA SCC (SCAP Compliance Checker)..."
+
+    # Setup SCC - returns path to executable or empty string on failure
+    SCC_EXE=$(setup_scc "$SCRIPT_DIR" "$SCAN_SAVE_DIR")
+
+    if [ -n "$SCC_EXE" ] && [ -x "$SCC_EXE" ]; then
+        run_scc_scan "$SCC_EXE" "$SCAN_SAVE_DIR"
+        if [ $? -eq 0 ]; then
+            COLLECTED_ITEMS+=("DISA SCC Compliance Scan")
+        else
+            WARNINGS+=("DISA SCC scan completed with warnings")
+        fi
+    else
+        print_red "Failed to setup SCC"
+        WARNINGS+=("DISA SCC scan skipped - setup failed")
+    fi
 fi
 #endregion
 
