@@ -615,6 +615,63 @@ if [ "$IS_ROOT" = false ]; then
 fi
 #endregion
 
+#region Tool Availability Check
+MISSING_TOOLS=()
+HAS_SS=false
+HAS_NETSTAT=false
+HAS_JQ=false
+HAS_UNZIP=false
+
+command_exists ss && HAS_SS=true
+command_exists netstat && HAS_NETSTAT=true
+command_exists jq && HAS_JQ=true
+command_exists unzip && HAS_UNZIP=true
+
+# Check for network tools
+if [ "$HAS_SS" = false ] && [ "$HAS_NETSTAT" = false ]; then
+    MISSING_TOOLS+=("ss or netstat (network ports/connections)")
+fi
+
+# Check for jq (log parsing)
+if [ "$HAS_JQ" = false ]; then
+    MISSING_TOOLS+=("jq (enhanced log parsing)")
+fi
+
+# Check for unzip (SCC extraction)
+if [ "$HAS_UNZIP" = false ]; then
+    MISSING_TOOLS+=("unzip (SCC bundle extraction)")
+fi
+
+# Display warning if tools are missing
+if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+    echo ""
+    print_yellow "========================================================"
+    print_yellow "  NOTE: Some optional tools are not installed"
+    print_yellow "========================================================"
+    echo ""
+    print_yellow "  Missing tools:"
+    for tool in "${MISSING_TOOLS[@]}"; do
+        print_red "    [X] $tool"
+    done
+    echo ""
+    print_yellow "  Impact:"
+    if [ "$HAS_SS" = false ] && [ "$HAS_NETSTAT" = false ]; then
+        echo "    - Network ports/processes (PPS) will NOT be collected"
+        echo "    - Install with: apt install iproute2  (for ss)"
+        echo "                 or: apt install net-tools (for netstat)"
+    fi
+    if [ "$HAS_JQ" = false ]; then
+        echo "    - Log parsing will use basic mode (less detailed)"
+        echo "    - Install with: apt install jq"
+    fi
+    if [ "$HAS_UNZIP" = false ]; then
+        echo "    - SCC bundle extraction will not work"
+        echo "    - Install with: apt install unzip"
+    fi
+    echo ""
+fi
+#endregion
+
 #region Interactive Mode Configuration
 if [ "$SILENT" = false ]; then
     echo ""
