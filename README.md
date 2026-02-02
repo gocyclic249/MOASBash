@@ -125,12 +125,38 @@ Transfer the ZIP file to your air-gapped target system using approved media (USB
 
 ### Step 4: Place Bundle in Script Directory
 
+**Option A: ZIP Bundle (requires `unzip` on target)**
+
 Place the SCC bundle ZIP file in the **same directory** as `MOAS.sh`:
 
 ```
 /path/to/MOASBash/
 ├── MOAS.sh
-├── scc-5.10.2_ubuntu22_amd64_bundle.zip   <-- Place here
+├── scc-5.10.2_ubuntu22_amd64_bundle.zip   <-- Place ZIP here
+├── README.md
+└── LICENSE
+```
+
+**Option B: Pre-extracted (for systems without `unzip`)**
+
+If the target system doesn't have `unzip`, extract the bundle on another system first:
+
+```bash
+# On a system with unzip:
+unzip scc-5.10.2_ubuntu22_amd64_bundle.zip
+cd scc-5.10.2_ubuntu22_amd64
+tar -xzf scc-5.10.2_ubuntu22_amd64.tar.gz
+```
+
+Then transfer the extracted `scc_5.10.2` folder to the target system:
+
+```
+/path/to/MOASBash/
+├── MOAS.sh
+├── scc_5.10.2/                            <-- Place extracted folder here
+│   ├── cscc                               <-- The script will find this
+│   ├── Resources/
+│   └── ...
 ├── README.md
 └── LICENSE
 ```
@@ -142,11 +168,10 @@ sudo ./MOAS.sh --scc
 ```
 
 The script will automatically:
-1. Find the SCC bundle ZIP file
-2. Extract the bundle
-3. Extract the tar.gz installer from the bundle
-4. Run the SCAP compliance scan
-5. Save results to the output directory
+1. Look for a pre-extracted `cscc` executable in subdirectories
+2. If not found, look for and extract the ZIP bundle
+3. Run the SCAP compliance scan
+4. Save results to the output directory
 
 ## Output
 
