@@ -225,6 +225,36 @@ The tool detects over 60 industrial control system protocols including:
 | Event Logs | Windows Event Log | journalctl/syslog |
 | System Info | WMI | /proc, /sys, dmidecode |
 
+## Troubleshooting
+
+### "#!/bin/bash^M: bad interpreter" Error
+
+If you see this error when running the script:
+
+```
+bash: ./MOAS.sh: /bin/bash^M: bad interpreter: No such file or directory
+```
+
+This means the file has Windows-style line endings (CRLF). Fix it by running:
+
+```bash
+sed -i 's/\r$//' MOAS.sh
+```
+
+### "Permission denied" Error
+
+Make sure the script is executable:
+
+```bash
+chmod +x MOAS.sh
+```
+
+Then run with:
+
+```bash
+sudo ./MOAS.sh
+```
+
 ## License
 
 GPL 2.0 - See [LICENSE](LICENSE) file.
