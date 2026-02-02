@@ -274,6 +274,7 @@ show_scc_requirements() {
 }
 
 # Function to find and setup SCC
+# Note: Status messages go to stderr, only the executable path goes to stdout
 setup_scc() {
     local script_dir="$1"
     local output_dir="$2"
@@ -282,38 +283,38 @@ setup_scc() {
     local bundle_pattern=$(echo "$info" | cut -d'|' -f1)
 
     if [ "$bundle_pattern" = "UNKNOWN" ]; then
-        print_red "  Cannot determine SCC bundle for this OS"
+        print_red "  Cannot determine SCC bundle for this OS" >&2
         return 1
     fi
 
     # Look for SCC bundle in script directory
-    print_green "Looking for SCC bundle in: $script_dir"
+    print_green "Looking for SCC bundle in: $script_dir" >&2
 
     local scc_zip=$(find "$script_dir" -maxdepth 1 -name "scc-*_bundle.zip" -type f 2>/dev/null | head -1)
 
     if [ -z "$scc_zip" ]; then
-        print_red "  SCC bundle not found!"
-        echo ""
-        show_scc_requirements
+        print_red "  SCC bundle not found!" >&2
+        echo "" >&2
+        show_scc_requirements >&2
         return 1
     fi
 
-    print_green "  Found SCC bundle: $(basename "$scc_zip")"
+    print_green "  Found SCC bundle: $(basename "$scc_zip")" >&2
 
     # Create SCC working directory
     local scc_work_dir="${output_dir}/SCC"
     mkdir -p "$scc_work_dir"
 
     # Extract the ZIP bundle
-    print_green "  Extracting SCC bundle..."
+    print_green "  Extracting SCC bundle..." >&2
     if command_exists unzip; then
         unzip -q -o "$scc_zip" -d "$scc_work_dir" 2>/dev/null
         if [ $? -ne 0 ]; then
-            print_red "  Failed to extract ZIP bundle"
+            print_red "  Failed to extract ZIP bundle" >&2
             return 1
         fi
     else
-        print_red "  'unzip' command not found - please install unzip"
+        print_red "  'unzip' command not found - please install unzip" >&2
         WARNINGS+=("SCC scan skipped - unzip not installed")
         return 1
     fi
@@ -327,15 +328,15 @@ setup_scc() {
     fi
 
     if [ -n "$scc_tarball" ]; then
-        print_green "  Found tarball: $(basename "$scc_tarball")"
-        print_green "  Extracting SCC application..."
+        print_green "  Found tarball: $(basename "$scc_tarball")" >&2
+        print_green "  Extracting SCC application..." >&2
 
         local scc_extract_dir="${scc_work_dir}/scc"
         mkdir -p "$scc_extract_dir"
 
         tar -xzf "$scc_tarball" -C "$scc_extract_dir" 2>/dev/null
         if [ $? -ne 0 ]; then
-            print_red "  Failed to extract tarball"
+            print_red "  Failed to extract tarball" >&2
             return 1
         fi
 
@@ -351,7 +352,7 @@ setup_scc() {
         fi
 
         if [ -n "$SCC_EXECUTABLE" ]; then
-            print_green "  Found SCC executable: $SCC_EXECUTABLE"
+            print_green "  Found SCC executable: $SCC_EXECUTABLE" >&2
             echo "$SCC_EXECUTABLE"
             return 0
         fi
@@ -362,23 +363,23 @@ setup_scc() {
     local scc_deb=$(find "$scc_work_dir" -name "scc-*.deb" -type f 2>/dev/null | head -1)
 
     if [ -n "$scc_rpm" ] || [ -n "$scc_deb" ]; then
-        print_yellow "  Found package installer but no standalone tarball"
-        print_yellow "  For air-gapped systems, the tarball is recommended"
-        print_yellow "  You can install the package manually:"
-        [ -n "$scc_rpm" ] && echo "    sudo rpm -i $scc_rpm"
-        [ -n "$scc_deb" ] && echo "    sudo dpkg -i $scc_deb"
-        echo ""
+        print_yellow "  Found package installer but no standalone tarball" >&2
+        print_yellow "  For air-gapped systems, the tarball is recommended" >&2
+        print_yellow "  You can install the package manually:" >&2
+        [ -n "$scc_rpm" ] && echo "    sudo rpm -i $scc_rpm" >&2
+        [ -n "$scc_deb" ] && echo "    sudo dpkg -i $scc_deb" >&2
+        echo "" >&2
 
         # Check if SCC is already installed
         if command_exists cscc; then
             SCC_EXECUTABLE=$(which cscc)
-            print_green "  Using installed SCC: $SCC_EXECUTABLE"
+            print_green "  Using installed SCC: $SCC_EXECUTABLE" >&2
             echo "$SCC_EXECUTABLE"
             return 0
         fi
     fi
 
-    print_red "  Could not find or setup SCC executable"
+    print_red "  Could not find or setup SCC executable" >&2
     return 1
 }
 
@@ -908,13 +909,13 @@ print_green "Getting Local Users"
 write_csv_header "$CSV_LOCAL_USERS" "UserName" "UID" "GID" "Description" "HomeDirectory" "Shell" "Groups"
 
 USER_COUNT=0
-while IFS=: read -r USERNAME PASSWORD UID GID GECOS HOME SHELL; do
+while IFS=: read -r USERNAME PASSWORD USER_UID USER_GID GECOS USER_HOME USER_SHELL; do
     # Skip system accounts (UID < 1000) unless they have login shells
-    if [ "$UID" -ge 1000 ] || [[ "$SHELL" == *"bash"* ]] || [[ "$SHELL" == *"zsh"* ]] || [[ "$SHELL" == *"sh"* && "$SHELL" != *"nologin"* && "$SHELL" != *"false"* ]]; then
+    if [ "$USER_UID" -ge 1000 ] || [[ "$USER_SHELL" == *"bash"* ]] || [[ "$USER_SHELL" == *"zsh"* ]] || [[ "$USER_SHELL" == *"sh"* && "$USER_SHELL" != *"nologin"* && "$USER_SHELL" != *"false"* ]]; then
         # Get user's groups
-        GROUPS=$(groups "$USERNAME" 2>/dev/null | cut -d: -f2 | xargs | tr ' ' ';')
+        USER_GROUPS=$(groups "$USERNAME" 2>/dev/null | cut -d: -f2 | xargs | tr ' ' ';')
 
-        append_csv_row "$CSV_LOCAL_USERS" "$USERNAME" "$UID" "$GID" "$GECOS" "$HOME" "$SHELL" "$GROUPS"
+        append_csv_row "$CSV_LOCAL_USERS" "$USERNAME" "$USER_UID" "$USER_GID" "$GECOS" "$USER_HOME" "$USER_SHELL" "$USER_GROUPS"
         ((USER_COUNT++))
     fi
 done < /etc/passwd
