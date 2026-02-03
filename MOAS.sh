@@ -273,9 +273,82 @@ show_scc_requirements() {
     echo ""
 }
 
+# Function to find cscc in common install locations
+# Returns the path to cscc if found, empty string otherwise
+find_installed_cscc() {
+    # Check PATH first
+    if command_exists cscc; then
+        which cscc
+        return 0
+    fi
+
+    # Check common install locations
+    local common_paths=(
+        "/opt/scc/cscc"
+        "/opt/scc/bin/cscc"
+        "/usr/local/bin/cscc"
+        "/usr/bin/cscc"
+        "/opt/scc_*/cscc"
+    )
+
+    for path_pattern in "${common_paths[@]}"; do
+        # Use ls to expand globs
+        local found=$(ls -1 $path_pattern 2>/dev/null | head -1)
+        if [ -n "$found" ] && [ -x "$found" ]; then
+            echo "$found"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Function to install SCC from a local .deb or .rpm package
+install_scc_package() {
+    local pkg_file="$1"
+    local pkg_name=$(basename "$pkg_file")
+
+    if [[ "$pkg_name" == *.deb ]]; then
+        if command_exists dpkg; then
+            print_green "  Installing SCC from: $pkg_name" >&2
+            dpkg -i "$pkg_file" >&2 2>&1
+            if [ $? -eq 0 ]; then
+                print_green "  SCC package installed successfully" >&2
+                return 0
+            else
+                print_red "  Failed to install .deb package" >&2
+                return 1
+            fi
+        else
+            print_red "  dpkg not available to install .deb package" >&2
+            return 1
+        fi
+    elif [[ "$pkg_name" == *.rpm ]]; then
+        if command_exists rpm; then
+            print_green "  Installing SCC from: $pkg_name" >&2
+            rpm -i "$pkg_file" >&2 2>&1
+            if [ $? -eq 0 ]; then
+                print_green "  SCC package installed successfully" >&2
+                return 0
+            else
+                print_red "  Failed to install .rpm package" >&2
+                return 1
+            fi
+        else
+            print_red "  rpm not available to install .rpm package" >&2
+            return 1
+        fi
+    fi
+
+    return 1
+}
+
 # Function to find and setup SCC
 # Note: Status messages go to stderr, only the executable path goes to stdout
-# Supports: pre-extracted cscc, ZIP bundle, or system-installed cscc
+# Search order:
+#   1. Already installed cscc (PATH and common locations like /opt/scc/)
+#   2. Try to unzip bundle and install via package manager
+#   3. If no unzip, look for already-unzipped package and install
 setup_scc() {
     local script_dir="$1"
     local output_dir="$2"
@@ -288,154 +361,73 @@ setup_scc() {
         return 1
     fi
 
-    print_green "Looking for SCC in: $script_dir" >&2
+    print_green "Looking for SCC..." >&2
 
-    # FIRST: Check for pre-extracted cscc executable in script directory or subdirectories
-    # This allows systems without unzip to use a pre-extracted SCC
-    print_white "  Checking for pre-extracted cscc..." >&2
-    local existing_cscc=$(find "$script_dir" -name "cscc" -type f 2>/dev/null | head -1)
+    # STEP 1: Check if cscc is already installed
+    print_white "  Checking for installed cscc..." >&2
+    local installed_cscc=$(find_installed_cscc)
 
-    if [ -n "$existing_cscc" ]; then
-        # If the path contains spaces, rename directories to fix it
-        # SCC does not handle spaces in its path correctly
-        if [[ "$existing_cscc" == *" "* ]]; then
-            print_yellow "  Path contains spaces, renaming directories..." >&2
-            # Get the relative path from script_dir to cscc
-            local rel_path="${existing_cscc#$script_dir/}"
-            # Split into path components and rename any with spaces
-            local current_path="$script_dir"
-            local IFS_ORIG="$IFS"
-            IFS='/' read -ra path_parts <<< "$rel_path"
-            IFS="$IFS_ORIG"
-            for part in "${path_parts[@]}"; do
-                if [[ "$part" == *" "* ]]; then
-                    local sanitized=$(echo "$part" | tr ' ' '_')
-                    if [ -e "$current_path/$part" ] && [ ! -e "$current_path/$sanitized" ]; then
-                        mv "$current_path/$part" "$current_path/$sanitized" 2>/dev/null
-                        print_white "    Renamed: '$part' -> '$sanitized'" >&2
-                    fi
-                    current_path="$current_path/$sanitized"
-                else
-                    current_path="$current_path/$part"
-                fi
-            done
-            # Re-find cscc after renames
-            existing_cscc=$(find "$script_dir" -name "cscc" -type f 2>/dev/null | head -1)
-        fi
-
-        # Make sure it's executable
-        if [ ! -x "$existing_cscc" ]; then
-            chmod +x "$existing_cscc" 2>/dev/null
-        fi
-
-        if [ -x "$existing_cscc" ]; then
-            print_green "  Found pre-extracted SCC: $existing_cscc" >&2
-            echo "$existing_cscc"
-            return 0
-        fi
-    fi
-
-    # SECOND: Check if cscc is installed system-wide
-    if command_exists cscc; then
-        local system_cscc=$(which cscc)
-        print_green "  Found system-installed SCC: $system_cscc" >&2
-        echo "$system_cscc"
+    if [ -n "$installed_cscc" ]; then
+        print_green "  Found installed SCC: $installed_cscc" >&2
+        echo "$installed_cscc"
         return 0
     fi
 
-    # THIRD: Try to extract from ZIP bundle
+    # STEP 2: Try to unzip the bundle
     local scc_zip=$(find "$script_dir" -maxdepth 1 -name "scc-*_bundle.zip" -type f 2>/dev/null | head -1)
-
-    if [ -z "$scc_zip" ]; then
-        print_red "  No SCC found!" >&2
-        print_yellow "  Options:" >&2
-        print_yellow "    1. Place pre-extracted SCC folder in script directory" >&2
-        print_yellow "    2. Place SCC bundle ZIP in script directory" >&2
-        print_yellow "    3. Install SCC system-wide via package manager" >&2
-        echo "" >&2
-        show_scc_requirements >&2
-        return 1
-    fi
-
-    print_green "  Found SCC bundle: $(basename "$scc_zip")" >&2
-
-    # Check if unzip is available
-    if ! command_exists unzip; then
-        print_red "  'unzip' command not available" >&2
-        print_yellow "  Please pre-extract the SCC bundle on another system:" >&2
-        echo "    1. On a system with unzip, run: unzip $(basename "$scc_zip")" >&2
-        echo "    2. Extract the tarball: tar -xzf scc-*.tar.gz" >&2
-        echo "    3. Copy the extracted scc_* folder to: $script_dir" >&2
-        echo "" >&2
-        WARNINGS+=("SCC scan skipped - unzip not available and no pre-extracted SCC found")
-        return 1
-    fi
-
-    # Create SCC working directory
     local scc_work_dir="${output_dir}/SCC"
     mkdir -p "$scc_work_dir"
 
-    # Extract the ZIP bundle
-    print_green "  Extracting SCC bundle..." >&2
-    unzip -q -o "$scc_zip" -d "$scc_work_dir" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        print_red "  Failed to extract ZIP bundle" >&2
-        return 1
-    fi
+    if [ -n "$scc_zip" ]; then
+        print_green "  Found SCC bundle: $(basename "$scc_zip")" >&2
 
-    # Find and extract the tar.gz file
-    local scc_tarball=$(find "$scc_work_dir" -name "scc-*.tar.gz" -type f 2>/dev/null | head -1)
-
-    if [ -z "$scc_tarball" ]; then
-        # Try to find tar.gz in subdirectories
-        scc_tarball=$(find "$scc_work_dir" -name "*.tar.gz" -type f 2>/dev/null | head -1)
-    fi
-
-    if [ -n "$scc_tarball" ]; then
-        print_green "  Found tarball: $(basename "$scc_tarball")" >&2
-        print_green "  Extracting SCC application..." >&2
-
-        local scc_extract_dir="${scc_work_dir}/scc"
-        mkdir -p "$scc_extract_dir"
-
-        tar -xzf "$scc_tarball" -C "$scc_extract_dir" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            print_red "  Failed to extract tarball" >&2
-            return 1
-        fi
-
-        # Find the cscc executable
-        SCC_EXECUTABLE=$(find "$scc_extract_dir" -name "cscc" -type f -executable 2>/dev/null | head -1)
-
-        if [ -z "$SCC_EXECUTABLE" ]; then
-            # Try without executable flag (might need chmod)
-            SCC_EXECUTABLE=$(find "$scc_extract_dir" -name "cscc" -type f 2>/dev/null | head -1)
-            if [ -n "$SCC_EXECUTABLE" ]; then
-                chmod +x "$SCC_EXECUTABLE" 2>/dev/null
+        if command_exists unzip; then
+            print_green "  Extracting SCC bundle..." >&2
+            unzip -q -o "$scc_zip" -d "$scc_work_dir" 2>/dev/null
+            if [ $? -ne 0 ]; then
+                print_red "  Failed to extract ZIP bundle" >&2
             fi
+        else
+            print_yellow "  'unzip' not available, skipping ZIP extraction" >&2
         fi
+    fi
 
-        if [ -n "$SCC_EXECUTABLE" ]; then
-            print_green "  Found SCC executable: $SCC_EXECUTABLE" >&2
-            echo "$SCC_EXECUTABLE"
+    # STEP 3: Look for installable package (.deb or .rpm) in work dir or script dir
+    # Check both the extracted bundle directory and the script directory
+    print_white "  Looking for SCC installer package..." >&2
+    local scc_pkg=""
+
+    # Search extracted bundle first, then script directory
+    for search_dir in "$scc_work_dir" "$script_dir"; do
+        if [ -z "$scc_pkg" ]; then
+            scc_pkg=$(find "$search_dir" -name "scc-*.deb" -type f 2>/dev/null | head -1)
+        fi
+        if [ -z "$scc_pkg" ]; then
+            scc_pkg=$(find "$search_dir" -name "scc-*.rpm" -type f 2>/dev/null | head -1)
+        fi
+    done
+
+    if [ -n "$scc_pkg" ]; then
+        print_green "  Found SCC package: $(basename "$scc_pkg")" >&2
+        install_scc_package "$scc_pkg"
+
+        # Check if install succeeded by looking for cscc
+        installed_cscc=$(find_installed_cscc)
+        if [ -n "$installed_cscc" ]; then
+            print_green "  SCC ready: $installed_cscc" >&2
+            echo "$installed_cscc"
             return 0
         fi
     fi
 
-    # If no tarball, check for RPM or DEB packages
-    local scc_rpm=$(find "$scc_work_dir" -name "scc-*.rpm" -type f 2>/dev/null | head -1)
-    local scc_deb=$(find "$scc_work_dir" -name "scc-*.deb" -type f 2>/dev/null | head -1)
-
-    if [ -n "$scc_rpm" ] || [ -n "$scc_deb" ]; then
-        print_yellow "  Found package installer but no standalone tarball" >&2
-        print_yellow "  For air-gapped systems, the tarball is recommended" >&2
-        print_yellow "  You can install the package manually:" >&2
-        [ -n "$scc_rpm" ] && echo "    sudo rpm -i $scc_rpm" >&2
-        [ -n "$scc_deb" ] && echo "    sudo dpkg -i $scc_deb" >&2
-        echo "" >&2
-    fi
-
-    print_red "  Could not find or setup SCC executable" >&2
+    # If we still don't have cscc, give the user clear instructions
+    print_red "  Could not find or install SCC" >&2
+    echo "" >&2
+    print_yellow "  To use SCC, ensure the bundle ZIP or the .deb/.rpm package" >&2
+    print_yellow "  is in the same directory as MOAS.sh:" >&2
+    echo "    $script_dir" >&2
+    echo "" >&2
+    show_scc_requirements >&2
     return 1
 }
 
@@ -452,12 +444,16 @@ run_scc_scan() {
     local scc_results_dir="${output_dir}/SCC/Results"
     mkdir -p "$scc_results_dir"
 
+    # Enable all SCAP content before scanning
+    print_green "Enabling all SCC content..."
+    "$scc_exe" -ea 2>&1
+    echo ""
+
     print_green "Running SCC Compliance Scan..."
     print_gray "  This may take several minutes..."
     echo ""
 
     # Run SCC with output directory
-    # SCC typically uses -u for unattended mode with output directory
     "$scc_exe" -u "$scc_results_dir" 2>&1
 
     local exit_code=$?
