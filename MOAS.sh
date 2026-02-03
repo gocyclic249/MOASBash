@@ -296,6 +296,33 @@ setup_scc() {
     local existing_cscc=$(find "$script_dir" -name "cscc" -type f 2>/dev/null | head -1)
 
     if [ -n "$existing_cscc" ]; then
+        # If the path contains spaces, rename directories to fix it
+        # SCC does not handle spaces in its path correctly
+        if [[ "$existing_cscc" == *" "* ]]; then
+            print_yellow "  Path contains spaces, renaming directories..." >&2
+            # Get the relative path from script_dir to cscc
+            local rel_path="${existing_cscc#$script_dir/}"
+            # Split into path components and rename any with spaces
+            local current_path="$script_dir"
+            local IFS_ORIG="$IFS"
+            IFS='/' read -ra path_parts <<< "$rel_path"
+            IFS="$IFS_ORIG"
+            for part in "${path_parts[@]}"; do
+                if [[ "$part" == *" "* ]]; then
+                    local sanitized=$(echo "$part" | tr ' ' '_')
+                    if [ -e "$current_path/$part" ] && [ ! -e "$current_path/$sanitized" ]; then
+                        mv "$current_path/$part" "$current_path/$sanitized" 2>/dev/null
+                        print_white "    Renamed: '$part' -> '$sanitized'" >&2
+                    fi
+                    current_path="$current_path/$sanitized"
+                else
+                    current_path="$current_path/$part"
+                fi
+            done
+            # Re-find cscc after renames
+            existing_cscc=$(find "$script_dir" -name "cscc" -type f 2>/dev/null | head -1)
+        fi
+
         # Make sure it's executable
         if [ ! -x "$existing_cscc" ]; then
             chmod +x "$existing_cscc" 2>/dev/null
