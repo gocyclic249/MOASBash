@@ -20,13 +20,19 @@ A comprehensive Linux system inventory and audit tool. This is a bash port of th
 
 - Bash 4.0 or later
 - Root privileges recommended for full functionality
-- Common Linux utilities: `ip`, `ss` or `netstat`, `df`, `bc`, `jq` (for log parsing)
-- `unzip` - Required for SCC bundle extraction
 
 ### Optional Dependencies
 
-- `dmidecode` - For detailed BIOS/system manufacturer information
-- `oscap` - For OpenSCAP compliance scanning (alternative to SCC)
+The script will check for missing tools at startup and show package names and offline download links for your distro.
+
+| Tool | Purpose | Debian/Ubuntu | CentOS/RHEL |
+|------|---------|---------------|-------------|
+| `ss` | Network port collection (preferred) | `iproute2` | `iproute` |
+| `netstat` | Network port collection (alternative) | `net-tools` | `net-tools` |
+| `jq` | Enhanced log parsing | `jq` | `jq` |
+| `unzip` | SCC bundle extraction | `unzip` | `unzip` |
+| `dmidecode` | BIOS/system manufacturer info | `dmidecode` | `dmidecode` |
+| `oscap` | OpenSCAP compliance scanning | `libopenscap8` | `openscap-scanner` |
 
 ## Installation
 
