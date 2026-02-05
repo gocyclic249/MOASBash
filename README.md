@@ -1,4 +1,4 @@
-#THIS IS IN ALPHA!!! DO NOT USE IN PROD UNTILL VERY WELL TESTED FOR YOUR SYSTEM!!!!!!!!!!!!
+# THIS IS IN ALPHA!!! DO NOT USE IN PROD UNTILL VERY WELL TESTED FOR YOUR SYSTEM!!!!!!!!!!!!
 
 # MOAS - System Inventory and Audit Tool (Bash/Linux Version)
 
