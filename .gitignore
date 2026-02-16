@@ -7,6 +7,12 @@ scc-*_bundle.zip
 # SCC extracted directories
 scc-*/
 
+# Output directory
+output/
+
+# SCC tool files and directories
+SCC/
+
 # Editor/OS files
 *.swp
 *.swo

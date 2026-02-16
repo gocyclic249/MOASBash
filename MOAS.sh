@@ -833,6 +833,11 @@ SCAN_SAVE_DIR="${SCRIPT_DIR}/${SHORT_DATE}-${HOSTNAME}"
 # Create output directory
 mkdir -p "$SCAN_SAVE_DIR"
 
+# If run under sudo, change ownership to the invoking user
+if [ -n "$SUDO_USER" ]; then
+    chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$SCAN_SAVE_DIR"
+fi
+
 # Output files
 CSV_BASIC_INFO="${SCAN_SAVE_DIR}/${HOSTNAME}-BasicInfo-${NOW}.csv"
 CSV_LOCAL_USERS="${SCAN_SAVE_DIR}/${HOSTNAME}-LocalUsers-${NOW}.csv"
@@ -1417,6 +1422,10 @@ fi
 #region Fix Permissions
 print_green "Setting Permissions on Output Directory"
 chmod -R 755 "$SCAN_SAVE_DIR" 2>/dev/null || true
+# If run under sudo, ensure the invoking user owns the output
+if [ -n "$SUDO_USER" ]; then
+    chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$SCAN_SAVE_DIR"
+fi
 #endregion
 
 #region Summary Report
